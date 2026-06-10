@@ -94,3 +94,43 @@ def save_result(annotated_img: np.ndarray, output_path: str):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(output_path, annotated_img)
     print(f"Saved: {output_path}")
+
+def run_inference_with_geo(
+    model,
+    image_path: str,
+    camera_params,
+    conf_threshold: float = 0.25
+) -> dict:
+    """
+    Run inference and attach geolocation to every detection.
+    Requires a CameraParams object.
+    """
+    from src.geolocation.converter import geolocate_all
+
+    result = run_inference(model, image_path, conf_threshold)
+
+    img = result["image"]
+    img_h, img_w = img.shape[:2]
+
+    geo_detections = geolocate_all(
+        result["detections"],
+        img_w,
+        img_h,
+        camera_params
+    )
+
+    result["geo_detections"] = [
+        {
+            "class_name": g.class_name,
+            "confidence": g.confidence,
+            "bbox_pixels": g.bbox_pixels,
+            "center_lat": g.center_lat,
+            "center_lon": g.center_lon,
+            "bbox_lat_lon": g.bbox_lat_lon,
+            "altitude_m": g.altitude_m,
+            "geolocation_method": g.geolocation_method,
+        }
+        for g in geo_detections
+    ]
+
+    return result
