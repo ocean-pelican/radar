@@ -32,3 +32,4 @@ logs/
 # Node
 node_modules/
 dist/
+CLAUDE.md
