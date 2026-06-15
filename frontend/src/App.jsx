@@ -6,29 +6,37 @@ import ImageUploader from "./ImageUploader";
 export default function App() {
   const [geojson, setGeojson] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("Upload a drone image to begin.");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
 
-      {/* Top bar — image upload controls */}
       <ImageUploader
         onDetections={setGeojson}
         onLoading={setLoading}
         loading={loading}
+        onStatus={setStatus}
       />
 
-      {/* Main content — map + sidebar */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      {/* Status bar */}
+      <div style={{
+        padding: "6px 16px",
+        background: "#0f1117",
+        borderBottom: "1px solid #2d3748",
+        fontSize: "12px",
+        color: "#64748b",
+        fontFamily: "monospace"
+      }}>
+        {status}
+      </div>
 
-        {/* Map takes up all remaining space */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <div style={{ flex: 1 }}>
           <MapView geojson={geojson} />
         </div>
-
-        {/* Detection panel on the right */}
         <DetectionPanel geojson={geojson} loading={loading} />
-
       </div>
+
     </div>
   );
 }

@@ -2,6 +2,9 @@ import os
 import uuid
 import cv2
 import aiofiles
+import uuid
+from src.api.queue import detection_queue, get_job_status
+from src.detection.tasks import run_detection_job
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
@@ -151,3 +154,80 @@ async def detect_geojson(
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
+# ── Async Detection (Queue-based) ─────────────────────────────────────────────
+
+@router.post("/detect/async")
+async def detect_async(
+    file: UploadFile = File(...),
+    conf_threshold: float = 0.25,
+):
+    """
+    Submit a detection job to the queue.
+    Returns a job_id immediately — caller polls /jobs/{job_id} for results.
+
+    This is the production pattern. The synchronous /detect endpoint
+    is useful for development and testing but blocks while processing.
+    This endpoint returns instantly regardless of how long detection takes.
+    """
+    if not file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
+        raise HTTPException(status_code=400, detail="Only JPG and PNG supported.")
+
+    # Save the uploaded file to a persistent path
+    # Unlike the sync endpoint, we can't clean this up immediately —
+    # the worker needs to read it after this request completes
+    job_id = str(uuid.uuid4())
+    saved_path = UPLOAD_DIR / f"{job_id}_{file.filename}"
+
+    async with aiofiles.open(saved_path, "wb") as f:
+        content = await file.read()
+        await f.write(content)
+
+    # Enqueue the job — returns immediately
+    job = detection_queue.enqueue(
+        run_detection_job,
+        str(saved_path),
+        conf_threshold,
+        job_id=job_id,
+        result_ttl=3600,    # keep result in Redis for 1 hour
+        failure_ttl=3600
+    )
+
+    return {
+        "job_id": job.id,
+        "status": "queued",
+        "poll_url": f"/api/v1/jobs/{job.id}"
+    }
+
+
+@router.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    """
+    Poll for the result of an async detection job.
+
+    Status values:
+    - queued:     job is waiting for a worker
+    - processing: worker has picked it up and is running
+    - complete:   result is ready
+    - failed:     something went wrong, error is included
+    - not_found:  job_id doesn't exist or has expired
+    """
+    return get_job_status(job_id)
+
+
+@router.get("/jobs")
+async def list_jobs():
+    """
+    Returns counts of jobs in each state.
+    Useful for monitoring queue health during a demo.
+    """
+    from rq import Queue
+    from src.api.queue import redis_conn
+
+    q = Queue("detection", connection=redis_conn)
+
+    return {
+        "queued": len(q),
+        "workers": len(q.workers),
+        "finished_jobs": q.count
+    }

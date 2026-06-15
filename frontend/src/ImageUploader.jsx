@@ -1,36 +1,69 @@
 import { useRef } from "react";
 
-export default function ImageUploader({ onDetections, onLoading, loading }) {
+const API_BASE = "http://localhost:8000/api/v1";
+const POLL_INTERVAL_MS = 1500;   // check every 1.5 seconds
+const MAX_POLLS = 40;             // give up after 60 seconds
+
+export default function ImageUploader({ onDetections, onLoading, loading, onStatus }) {
   const fileRef = useRef(null);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  async function pollForResult(jobId, attempts = 0) {
+    if (attempts >= MAX_POLLS) {
+      onLoading(false);
+      onStatus("Job timed out — try again.");
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/jobs/${jobId}`);
+    const data = await response.json();
+
+    if (data.status === "complete") {
+      onDetections(data.result.geojson);
+      onLoading(false);
+      onStatus(`Complete — ${data.result.total_detections} detections`);
+
+    } else if (data.status === "failed") {
+      onLoading(false);
+      onStatus(`Failed: ${data.error}`);
+
+    } else {
+      // Still queued or processing — poll again
+      onStatus(data.status === "queued" ? "Queued..." : "Processing...");
+      setTimeout(() => pollForResult(jobId, attempts + 1), POLL_INTERVAL_MS);
+    }
+  }
+
+  async function handleSubmit() {
     const file = fileRef.current.files[0];
     if (!file) return;
 
     onLoading(true);
+    onStatus("Submitting...");
 
     try {
+      // Submit job
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch(
-        "http://localhost:8000/api/v1/detect/geojson",
-        { method: "POST", body: formData }
-      );
+      const submitResponse = await fetch(`${API_BASE}/detect/async`, {
+        method: "POST",
+        body: formData
+      });
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+      if (!submitResponse.ok) {
+        throw new Error(`Submit failed: ${submitResponse.status}`);
       }
 
-      const geojson = await response.json();
-      onDetections(geojson);
+      const { job_id } = await submitResponse.json();
+      onStatus("Queued...");
+
+      // Start polling
+      setTimeout(() => pollForResult(job_id), POLL_INTERVAL_MS);
 
     } catch (err) {
-      console.error("Detection failed:", err);
-      alert(`Detection failed: ${err.message}`);
-    } finally {
+      console.error(err);
       onLoading(false);
+      onStatus(`Error: ${err.message}`);
     }
   }
 
@@ -64,7 +97,6 @@ export default function ImageUploader({ onDetections, onLoading, loading }) {
           cursor: loading ? "not-allowed" : "pointer",
           fontSize: "13px",
           fontWeight: "bold",
-          transition: "background 0.2s",
         }}
       >
         {loading ? "Processing..." : "Detect"}
